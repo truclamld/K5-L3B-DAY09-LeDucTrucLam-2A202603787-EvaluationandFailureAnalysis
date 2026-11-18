@@ -40,6 +40,14 @@
 
 Gate cho `fixed` **exit 0 — merge**. Gate chặn `seeded_regression` (**exit 1**) ở `refund_amount_correct`, `reply_ledger_match` và `pass_rate`; riêng `pass_rate` giảm có ý nghĩa theo paired CI. Các metric không có CI trong bảng không dùng điều kiện `no_significant_drop` trong spec.
 
+## M5–M6: Eval set v2, slices và nhiễu
+
+- **Eval set v2:** `data/eval/eval_set_v2.jsonl`; 5 seed chính `[11, 22, 33, 44, 55]`. Slice gate theo dõi `money_movement`, `adversarial` và `denial`.
+- **A/A:** chạy cùng shape `swarm` trên seed chính và seed thay thế `[66, 77, 88, 99, 110]`. Trên MockLLM, mọi metric có Δ = 0.0000; `pass_hat_5` là 0.8929 ở cả hai lượt. Đây là mức nhiễu quan sát được bằng harness xác định này, không phải ước lượng nhiễu của LLM thật.
+- **Ngưỡng M6:** `pass_hat_5` có floor 0.89 và blocking trong `config/metric_spec_v2.yaml`, thấp hơn baseline 0.8929. Floor nằm dưới dải A/A quan sát (chỉ một điểm Δ=0), để A/A không tự chặn PR; LLM thật cần nhiều lượt A/A để ước lượng dải nhiễu thực tế và đặt floor thấp hơn cạnh dưới của dải đó.
+- **Scorecard:** sau khi thêm metric blocking, `lab9.mutation --spec config/metric_spec_v2.yaml --baseline reports/baseline_v2.json` đạt 3/3 regression bị chặn, 0 báo nhầm. `fixed` và `honest_refactor` được merge; `seeded_regression`, `slice_regression` và `flaky_regression` bị chặn. `pass_hat_5` nằm trong các lý do chặn `seeded_regression` và `flaky_regression`. Ở variant công khai này, `pass_rate` trung bình cũng bị gate chặn; vì vậy kết quả scorecard xác nhận pass-hat hoạt động như tín hiệu blocking bổ sung, nhưng chưa chứng minh riêng rằng chỉ số trung bình sẽ bỏ sót mọi regression chập chờn.
+- **Diễn giải:** `pass_at_k` ước lượng xác suất có ít nhất một lượt thành công trong k lượt; `pass_hat_k` (pass^k) ước lượng xác suất cả k lượt đều thành công. Với tác vụ cần độ tin cậy lặp lại, pass^k thể hiện rủi ro chập chờn rõ hơn trung bình. Năm seed vẫn có giới hạn: lỗi chỉ xuất hiện ở 1/3 seed có thể không bị phát hiện ổn định; không hạ floor chỉ để bắt lỗi hiếm đó.
+
 ## Judge calibration
 
 - `tone_ok`: κ=0.757, precision=0.857, recall=0.800 (n=100); đạt các floor κ≥0.6, P≥0.8, R≥0.7. Dùng làm tín hiệu có giám sát, cần giữ các quy tắc rubric về xưng hô theo ngữ cảnh, từ được phép và cách xử lý lời xin lỗi.
