@@ -1906,12 +1906,12 @@
     "refund_amount_correct": 0.9357,
     "pass_rate": 0.9357,
     "pass_5": 0.8929,
-    "pass_at_1": null,
-    "pass_hat_1": null,
-    "pass_at_3": null,
-    "pass_hat_3": null,
-    "pass_at_5": null,
-    "pass_hat_5": null,
+    "pass_at_1": 0.9357,
+    "pass_hat_1": 0.9357,
+    "pass_at_3": 0.9893,
+    "pass_hat_3": 0.8929,
+    "pass_at_5": 1.0,
+    "pass_hat_5": 0.8929,
     "cost_per_success": 52.9053
   }
 }

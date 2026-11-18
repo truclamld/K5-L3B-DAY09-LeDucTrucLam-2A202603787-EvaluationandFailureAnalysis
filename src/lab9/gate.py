@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 
 from lab8.console import utf8_stdio
@@ -33,8 +34,121 @@ def integrity_check(pr: dict, base: dict, spec: dict, base_spec: dict | None = N
         including dropping no_significant_drop)
       - an item's slice tags in PR rows differ from the baseline's (relabelling an item out of a
         slice hides its regression from the slice gate)"""
-    # TODO M7
-    return []
+    problems: list[str] = []
+
+    def finite_number(value: object) -> bool:
+        # bool is an int subclass, but is not a meaningful aggregate metric.
+        return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+    manifest = pr.get("manifest") or {}
+    base_manifest = base.get("manifest") or {}
+    rows = pr.get("rows")
+    base_rows = base.get("rows")
+    metrics = pr.get("metrics")
+
+    if not isinstance(rows, list):
+        problems.append("rows is missing or is not a list")
+        rows = []
+    if not isinstance(base_rows, list):
+        problems.append("baseline rows is missing or is not a list")
+        base_rows = []
+    if not isinstance(metrics, dict):
+        problems.append("metrics is missing or is not an object")
+        metrics = {}
+
+    for metric_id, value in metrics.items():
+        if not finite_number(value):
+            problems.append(f"metric {metric_id} is not finite")
+
+    items, seeds = manifest.get("items"), manifest.get("seeds")
+    if not isinstance(items, int) or isinstance(items, bool) or items < 0 or not isinstance(seeds, list):
+        problems.append("manifest items/seeds are invalid")
+    elif len(rows) != items * len(seeds):
+        problems.append(f"row count {len(rows)} != manifest items × seeds ({items} × {len(seeds)})")
+
+    def row_keys(source: list) -> tuple[set[tuple[object, object]], bool]:
+        keys: set[tuple[object, object]] = set()
+        valid = True
+        for index, row in enumerate(source):
+            if not isinstance(row, dict) or row.get("item_id") is None or row.get("seed") is None:
+                problems.append(f"row {index} has no valid item_id/seed")
+                valid = False
+                continue
+            key = (row["item_id"], row["seed"])
+            if key in keys:
+                problems.append(f"duplicate row for item_id/seed {key!r}")
+                valid = False
+            keys.add(key)
+        return keys, valid
+
+    pr_keys, _ = row_keys(rows)
+    base_keys, _ = row_keys(base_rows)
+    if pr_keys != base_keys:
+        problems.append("(item_id, seed) rows differ from baseline")
+
+    failures = pr.get("evaluator_failures")
+    if failures:
+        problems.append("evaluator_failures is non-empty")
+
+    # Only per-row grader outputs are checked here. Aggregate-only metrics such as
+    # pass_hat_5 and system summaries do not have a value on each row.
+    row_fields = {k for r in rows if isinstance(r, dict) for k in r}
+    row_metric_ids = {
+        m.get("id") for m in spec.get("metrics", [])
+        if isinstance(m, dict) and m.get("id") and
+        (m.get("id") in row_fields or
+         (m.get("level") != "system" and not str(m.get("id")).startswith(("pass_hat_", "pass_at_"))))
+    }
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            continue
+        for metric_id in row_metric_ids:
+            if metric_id not in row or row[metric_id] is None:
+                problems.append(f"row {index} has missing graded metric {metric_id}")
+
+    # Slice membership is part of the evaluated evidence. Compare by identity after
+    # checking the row sets so relabelling cannot hide a regression from a slice.
+    base_by_key = {(r.get("item_id"), r.get("seed")): r for r in base_rows if isinstance(r, dict)}
+    for row in rows:
+        if not isinstance(row, dict) or (row.get("item_id"), row.get("seed")) not in base_by_key:
+            continue
+        key = (row.get("item_id"), row.get("seed"))
+        tags = row.get("slices") or []
+        base_tags = base_by_key[key].get("slices") or []
+        if not isinstance(tags, list) or not isinstance(base_tags, list) or set(tags) != set(base_tags):
+            problems.append(f"slice tags differ from baseline for {key!r}")
+
+    if base_spec is not None:
+        # Ratcheting applies only within an eval-set version; changing the eval set
+        # requires a newly reviewed baseline/spec pair.
+        if spec.get("eval_set_version") == base_spec.get("eval_set_version"):
+            def compare_rules(current: list, previous: list, label: str) -> None:
+                old_by_id = {x.get("id"): x for x in previous if isinstance(x, dict) and x.get("id")}
+                new_by_id = {x.get("id"): x for x in current if isinstance(x, dict) and x.get("id")}
+                for mid, old in old_by_id.items():
+                    new = new_by_id.get(mid)
+                    if new is None:
+                        problems.append(f"{label} {mid} was removed")
+                        continue
+                    if old.get("blocking") and not new.get("blocking"):
+                        problems.append(f"{label} {mid} is no longer blocking")
+                    old_th = old.get("threshold") or ({k: old[k] for k in ("min", "max", "max_increase", "no_significant_drop") if k in old})
+                    new_th = new.get("threshold") or ({k: new[k] for k in ("min", "max", "max_increase", "no_significant_drop") if k in new})
+                    if "max" in old_th and ("max" not in new_th or new_th["max"] > old_th["max"]):
+                        problems.append(f"{label} {mid} max threshold was loosened")
+                    if "min" in old_th and ("min" not in new_th or new_th["min"] < old_th["min"]):
+                        problems.append(f"{label} {mid} min threshold was loosened")
+                    if "max_increase" in old_th and ("max_increase" not in new_th or new_th["max_increase"] > old_th["max_increase"]):
+                        problems.append(f"{label} {mid} max_increase threshold was loosened")
+                    if old_th.get("no_significant_drop") and not new_th.get("no_significant_drop"):
+                        problems.append(f"{label} {mid} no_significant_drop was removed")
+
+            compare_rules(spec.get("metrics", []), base_spec.get("metrics", []), "metric")
+            compare_rules(spec.get("slices", []), base_spec.get("slices", []), "slice")
+
+    # Preserve order while keeping diagnostics readable if multiple checks find the
+    # same underlying issue.
+    return list(dict.fromkeys(problems))
 
 
 def slice_check(pr: dict, base: dict, spec: dict) -> tuple[list[str], list[str]]:
