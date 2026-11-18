@@ -44,8 +44,42 @@ def slice_check(pr: dict, base: dict, spec: dict) -> tuple[list[str], list[str]]
       - fail if below "min", or if no_significant_drop and the paired CI over the slice's items
         lies entirely below 0
     Return (blocked ids like "slice:money_movement/pass_rate", report lines)."""
-    # TODO M5
-    return [], []
+    blocked, lines = [], []
+    bs = spec.get("bootstrap", {})
+    for rule in spec.get("slices", []):
+        name, metric = rule["name"], rule["metric"]
+        values = per_item(pr, metric, slice_name=name)
+        baseline = per_item(base, metric, slice_name=name)
+        val = sum(values.values()) / len(values) if values else None
+        verdict, note = "ok", ""
+
+        # A missing slice/metric cannot silently pass a blocking rule.
+        if val is None:
+            verdict = "missing"
+        elif "min" in rule and val < rule["min"]:
+            verdict = "fail"
+
+        if rule.get("no_significant_drop") and val is not None:
+            keys = sorted(set(values) & set(baseline))
+            if not keys:
+                verdict = "missing"
+                note = "no paired baseline items"
+            else:
+                d, lo, hi = stats.paired_bootstrap(
+                    [values[k] for k in keys], [baseline[k] for k in keys],
+                    n_resamples=bs.get("n_resamples", 1000), rng=bs.get("rng", 2027),
+                    confidence=bs.get("confidence", 0.95),
+                )
+                note = f"Δ {d:+.3f} CI [{lo:+.3f}, {hi:+.3f}]"
+                if hi < 0:
+                    verdict = "fail"
+
+        if verdict != "ok" and rule.get("blocking"):
+            blocked.append(f"slice:{name}/{metric}")
+        label = {"ok": "ok", "missing": "MISSING"}.get(
+            verdict, "BLOCK" if rule.get("blocking") else "warn")
+        lines.append(f"  slice:{name}/{metric:<14} {val!s:<8} {json.dumps(rule):<40} {note:<28} {label}")
+    return blocked, lines
 
 
 def check(pr: dict, base: dict, spec: dict, base_spec: dict | None = None) -> tuple[list[str], list[str]]:
