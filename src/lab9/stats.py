@@ -79,8 +79,33 @@ def paired_bootstrap(a: Sequence[float], b: Sequence[float], *, n_resamples: int
     """a[i], b[i] = per-item mean over seeds, SAME items, SAME order.
     Return (mean(a)-mean(b), lo, hi) with scipy.stats.bootstrap(paired=True, method="percentile",
     rng=numpy.random.default_rng(rng)). If a == b everywhere return (0.0, 0.0, 0.0)."""
-    # TODO M4
-    raise NotImplementedError
+    import numpy as np
+    from scipy.stats import bootstrap
+
+    if len(a) != len(b):
+        raise ValueError("paired samples must have the same length")
+    if not a:
+        raise ValueError("paired samples must not be empty")
+    if n_resamples <= 0:
+        raise ValueError("n_resamples must be positive")
+    if not 0.0 < confidence < 1.0:
+        raise ValueError("confidence must be between 0 and 1")
+
+    left = np.asarray(a, dtype=float)
+    right = np.asarray(b, dtype=float)
+    if np.array_equal(left, right):
+        return (0.0, 0.0, 0.0)
+
+    def mean_difference(x, y, axis=-1):
+        return np.mean(x - y, axis=axis)
+
+    result = bootstrap(
+        (left, right), mean_difference, paired=True, vectorized=True,
+        n_resamples=n_resamples, confidence_level=confidence,
+        method="percentile", rng=np.random.default_rng(rng),
+    )
+    return (float(np.mean(left - right)), float(result.confidence_interval.low),
+            float(result.confidence_interval.high))
 
 
 def pass_at_k(n: int, c: int, k: int) -> float:
