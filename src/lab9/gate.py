@@ -91,13 +91,14 @@ def integrity_check(pr: dict, base: dict, spec: dict, base_spec: dict | None = N
         problems.append("evaluator_failures is non-empty")
 
     # Only per-row grader outputs are checked here. Aggregate-only metrics such as
-    # pass_hat_5 and system summaries do not have a value on each row.
+    # pass_5, pass_hat_5, pass_at_5, and system summaries do not have a value on each row.
     row_fields = {k for r in rows if isinstance(r, dict) for k in r}
     row_metric_ids = {
         m.get("id") for m in spec.get("metrics", [])
         if isinstance(m, dict) and m.get("id") and
         (m.get("id") in row_fields or
-         (m.get("level") != "system" and not str(m.get("id")).startswith(("pass_hat_", "pass_at_"))))
+         (m.get("level") != "system" and m.get("id") != "pass_5"
+          and not str(m.get("id")).startswith(("pass_hat_", "pass_at_"))))
     }
     for index, row in enumerate(rows):
         if not isinstance(row, dict):
